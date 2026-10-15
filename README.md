@@ -170,7 +170,9 @@ python -m pytest tests\legacy -q -p no:cacheprovider -o addopts=""
 ```
 
 The tests use fake models and local test data; they do not require paid model
-calls or production credentials.
+calls or production credentials. GitHub Actions runs both suites independently
+and also type-checks and builds the frontend on pushes and pull requests to
+`main`.
 
 Check the frontend:
 
