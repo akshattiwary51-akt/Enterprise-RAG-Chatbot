@@ -1,0 +1,27 @@
+# secrets & local config
+.env
+*.env
+!.env.example
+# data (private documents, vectors, databases, logs)
+data/uploads/*
+data/chroma/*
+data/logs/*
+!data/uploads/.gitkeep
+!data/chroma/.gitkeep
+!data/logs/.gitkeep
+*.db
+*.sqlite3
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+# node
+node_modules/
+frontend/dist/
+# editors / os
+.idea/
+.vscode/
+.DS_Store

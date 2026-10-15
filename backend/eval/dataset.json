@@ -1,0 +1,134 @@
+{
+  "description": "Synthetic evaluation set. 'allowed' cases measure retrieval/grounding quality; 'denied' cases measure access-control correctness (must never leak).",
+  "documents": {
+    "hr_compensation_policy.md": [
+      "hr"
+    ],
+    "hr_employee_handbook.md": [
+      "hr",
+      "finance",
+      "engineering",
+      "employee"
+    ],
+    "eng_architecture.md": [
+      "engineering"
+    ],
+    "finance_budget_2027.csv": [
+      "finance"
+    ]
+  },
+  "cases": [
+    {
+      "id": "hr-salary-band",
+      "role": "hr",
+      "question": "What is the senior engineer salary band?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "hr_compensation_policy.md"
+      ],
+      "must_contain": [
+        "185000"
+      ]
+    },
+    {
+      "id": "eng-salary-denied",
+      "role": "engineering",
+      "question": "What is the senior engineer salary band?",
+      "expect_access": "denied",
+      "forbidden_strings": [
+        "185000",
+        "140000"
+      ]
+    },
+    {
+      "id": "emp-salary-denied",
+      "role": "employee",
+      "question": "What is the senior engineer salary band?",
+      "expect_access": "denied",
+      "forbidden_strings": [
+        "185000",
+        "140000"
+      ]
+    },
+    {
+      "id": "eng-payment-retries",
+      "role": "engineering",
+      "question": "How does the payment service retry failed charges?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "eng_architecture.md"
+      ],
+      "must_contain": [
+        "three times"
+      ]
+    },
+    {
+      "id": "emp-payment-denied",
+      "role": "employee",
+      "question": "How does the payment service retry failed charges?",
+      "expect_access": "denied",
+      "forbidden_strings": [
+        "Kafka",
+        "three times"
+      ]
+    },
+    {
+      "id": "all-vacation",
+      "role": "employee",
+      "question": "How many vacation days do full-time employees receive?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "hr_employee_handbook.md"
+      ],
+      "must_contain": [
+        "25"
+      ]
+    },
+    {
+      "id": "fin-budget-total",
+      "role": "finance",
+      "question": "What is the total Budget for Marketing?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "finance_budget_2027.csv"
+      ],
+      "must_contain": [
+        "600,000"
+      ]
+    },
+    {
+      "id": "eng-budget-denied",
+      "role": "engineering",
+      "question": "What is the total Budget for Marketing?",
+      "expect_access": "denied",
+      "forbidden_strings": [
+        "600,000",
+        "420000"
+      ]
+    },
+    {
+      "id": "hr-bonus",
+      "role": "hr",
+      "question": "What is the annual bonus target?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "hr_compensation_policy.md"
+      ],
+      "must_contain": [
+        "10 percent"
+      ]
+    },
+    {
+      "id": "eng-remote",
+      "role": "engineering",
+      "question": "How many days per week is remote work allowed?",
+      "expect_access": "allowed",
+      "expected_documents": [
+        "hr_employee_handbook.md"
+      ],
+      "must_contain": [
+        "three days"
+      ]
+    }
+  ]
+}
