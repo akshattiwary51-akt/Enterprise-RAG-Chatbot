@@ -92,6 +92,10 @@ def build_config(env_name: str | None = None) -> dict:
         "LOGIN_RATE_LIMIT": _env("LOGIN_RATE_LIMIT", "10 per minute"),
         "CHAT_RATE_LIMIT": _env("CHAT_RATE_LIMIT", "30 per minute"),
         "UPLOAD_RATE_LIMIT": _env("UPLOAD_RATE_LIMIT", "30 per hour"),
+        "INGESTION_INLINE": env == "testing",
+        "INGESTION_POLL_SECONDS": _float("INGESTION_POLL_SECONDS", 1.0),
+        "INGESTION_LEASE_SECONDS": _int("INGESTION_LEASE_SECONDS", 120),
+        "INGESTION_MAX_ATTEMPTS": _int("INGESTION_MAX_ATTEMPTS", 3),
         # --- storage ---
         "DATA_DIR": str(data_dir),
         "UPLOAD_DIR": _env("UPLOAD_DIR", str(data_dir / "uploads")),
@@ -155,6 +159,8 @@ def validate_config(cfg: dict) -> None:
     if env == "production":
         if cfg["EMBEDDINGS_PROVIDER"] == "fake" or cfg["LLM_PROVIDER"] == "fake":
             problems.append("fake model providers are not allowed in production")
+        if cfg["INGESTION_INLINE"]:
+            problems.append("INGESTION_INLINE is not allowed in production")
         if cfg["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
             problems.append("SQLite is not supported in production; use PostgreSQL")
         if not cfg["CORS_ORIGINS"] or "*" in cfg["CORS_ORIGINS"]:
@@ -172,6 +178,12 @@ def validate_config(cfg: dict) -> None:
         problems.append("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
     if cfg["CHUNK_SIZE"] > cfg["PARENT_CHUNK_SIZE"]:
         problems.append("PARENT_CHUNK_SIZE must be >= CHUNK_SIZE")
+    if cfg["INGESTION_POLL_SECONDS"] <= 0:
+        problems.append("INGESTION_POLL_SECONDS must be greater than zero")
+    if cfg["INGESTION_LEASE_SECONDS"] <= 0:
+        problems.append("INGESTION_LEASE_SECONDS must be greater than zero")
+    if cfg["INGESTION_MAX_ATTEMPTS"] < 1:
+        problems.append("INGESTION_MAX_ATTEMPTS must be at least one")
 
     if problems:
         raise ConfigError("Invalid configuration: " + "; ".join(problems))

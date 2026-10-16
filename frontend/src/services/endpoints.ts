@@ -28,10 +28,10 @@ export const documentsApi = {
     form.append("classification", acl.classification);
     if (acl.owner_team) form.append("owner_team", acl.owner_team);
     if (acl.department) form.append("department", acl.department);
-    return http.post<DocumentRecord>("/documents/upload", form, { timeout: 300_000 }).then((r) => r.data);
+    return http.post<DocumentRecord>("/documents/upload", form).then((r) => r.data);
   },
   updatePermissions: (id: string, acl: AclInput) => http.patch<DocumentRecord>(`/documents/${id}/permissions`, acl).then((r) => r.data),
-  reindex: (id: string) => http.post<DocumentRecord>(`/documents/${id}/reindex`, null, { timeout: 300_000 }).then((r) => r.data),
+  reindex: (id: string) => http.post<DocumentRecord>(`/documents/${id}/reindex`, null).then((r) => r.data),
   remove: (id: string) => http.delete(`/documents/${id}`).then((r) => r.data),
   preview: (documentId: string, passageId: string) => http.get<PassagePreview>(`/documents/${documentId}/passages/${passageId}`).then((r) => r.data),
   download: async (id: string, filename: string) => {

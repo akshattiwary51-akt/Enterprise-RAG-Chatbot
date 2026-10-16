@@ -39,6 +39,16 @@ export default function DocumentsPage() {
     adminApi.roles().then(setRoles).catch(() => undefined);
     if (isAdmin) adminApi.users().then((p) => setUsers(p.items)).catch(() => undefined);
   }, [load, isAdmin]);
+  useEffect(() => {
+    if (!docs?.some((doc) => doc.status === "PENDING" || doc.status === "PROCESSING")) return;
+    let timer: number;
+    const poll = async () => {
+      await load();
+      timer = window.setTimeout(() => void poll(), 1500);
+    };
+    timer = window.setTimeout(() => void poll(), 1500);
+    return () => window.clearTimeout(timer);
+  }, [docs, load]);
 
   function pick(f: File | undefined | null) { if (f) { setFile(f); setError(null); setNotice(null); } }
 
@@ -48,7 +58,8 @@ export default function DocumentsPage() {
     try {
       const doc = await documentsApi.upload(file, { ...acl, owner_team: acl.owner_team || undefined, department: acl.department || undefined });
       if (doc.status === "FAILED") setError(`"${doc.filename}" was uploaded but processing failed: ${doc.error_message ?? "unknown error"}`);
-      else setNotice(`"${doc.filename}" is indexed and ready (${doc.chunk_count} chunks).`);
+      else if (doc.status === "READY") setNotice(`"${doc.filename}" is indexed and ready (${doc.chunk_count} chunks).`);
+      else setNotice(`"${doc.filename}" was uploaded and queued for indexing.`);
       setFile(null); setAcl(EMPTY_ACL); await load();
     } catch (e) { setError(describeError(e).message); } finally { setUploading(false); }
   }
@@ -91,7 +102,7 @@ export default function DocumentsPage() {
             <div className="space-y-4">
               <AclEditor value={acl} onChange={setAcl} roles={roles} users={users} isAdmin={isAdmin} />
               <Button onClick={() => void upload()} busy={uploading} disabled={!file || (acl.allowed_roles.length === 0 && acl.user_grants.length === 0)}>
-                {uploading ? "Uploading & indexing…" : "Upload and index"}
+                {uploading ? "Uploading…" : "Upload and queue"}
               </Button>
             </div>
           </div>
@@ -119,7 +130,7 @@ export default function DocumentsPage() {
                       <td className="px-5 py-3"><div className="flex justify-end gap-1">
                         {isAdmin && <>
                           <Button variant="ghost" title="Edit permissions" aria-label={`Edit permissions for ${d.filename}`} onClick={() => { setEditing(d); setEditAcl({ allowed_roles: d.allowed_roles ?? [], user_grants: (d.user_grants ?? []).map((g) => g.id), classification: d.classification, department: d.department ?? "", owner_team: d.owner_team ?? "" }); }}><ShieldCheck className="h-4 w-4" /></Button>
-                          <Button variant="ghost" title="Re-index" aria-label={`Re-index ${d.filename}`} busy={rowBusy === d.id} onClick={() => void run(d.id, () => documentsApi.reindex(d.id), "Re-indexing finished.")}><RefreshCw className="h-4 w-4" /></Button>
+                          <Button variant="ghost" title="Re-index" aria-label={`Re-index ${d.filename}`} busy={rowBusy === d.id} disabled={d.status === "PROCESSING"} onClick={() => void run(d.id, () => documentsApi.reindex(d.id), "Re-indexing queued.")}><RefreshCw className="h-4 w-4" /></Button>
                           <Button variant="ghost" title="Delete" aria-label={`Delete ${d.filename}`} onClick={() => setConfirmDelete(d)}><Trash2 className="h-4 w-4 text-red-500" /></Button></>}
                       </div></td>
                     </tr>))}

@@ -119,7 +119,14 @@ Set-Location .\backend
 python -m flask --app wsgi run --host 127.0.0.1 --port 5000
 ```
 
-Run the frontend in another terminal:
+Run the durable ingestion worker in a second terminal:
+
+```powershell
+Set-Location .\backend
+python -m flask --app wsgi ingestion-worker
+```
+
+Run the frontend in a third terminal:
 
 ```powershell
 Set-Location .\frontend
@@ -129,6 +136,14 @@ npm run dev -- --host 127.0.0.1
 Open <http://127.0.0.1:5173/>. Vite proxies `/api` requests to the backend at
 `http://localhost:5000` by default. Override the proxy target with
 `VITE_API_PROXY` if the backend is running elsewhere.
+
+Uploads are validated and stored by the API, then committed to the database
+queue and returned with `202 Accepted`. The worker claims queued jobs using a
+database lease, indexes the document, and updates its status. The documents
+page refreshes automatically while indexing is pending. If a worker stops
+unexpectedly, another worker can reclaim the job after its lease expires.
+Start at least one worker for queued documents to be indexed. In test
+configuration, ingestion runs inline unless a test explicitly disables it.
 
 The local development server is not intended for production. Fake providers
 are development-only and return deterministic extractive answers, not answers
@@ -148,7 +163,10 @@ python -m flask --app wsgi seed-roles
 python -m flask --app wsgi create-admin --email admin@example.com --name "Admin"
 python -m flask --app wsgi purge-expired
 python -m flask --app wsgi reindex-all
+python -m flask --app wsgi ingestion-worker --once
 ```
+
+`reindex-all` queues the documents; run `ingestion-worker` to process them.
 
 `create-admin` prompts for a password unless `ADMIN_PASSWORD` is set in the
 environment. Avoid passing passwords as command-line arguments.
@@ -197,6 +215,9 @@ environment variables. Important settings include:
 | `LLM_PROVIDER` | `openai` (default) or development/test-only `fake`. |
 | `OPENAI_API_KEY` | API key required when either model provider is OpenAI. |
 | `CORS_ORIGINS` | Comma-separated frontend origins allowed by the API. |
+| `INGESTION_POLL_SECONDS` | Worker polling interval when no jobs are queued. |
+| `INGESTION_LEASE_SECONDS` | Worker lease duration before a crashed job can be reclaimed. |
+| `INGESTION_MAX_ATTEMPTS` | Maximum worker claims before an expired job is marked failed. |
 
 Generated databases, vector data, uploads, logs, virtual environments, and
 frontend dependencies are local data and are excluded from Git. On Windows,

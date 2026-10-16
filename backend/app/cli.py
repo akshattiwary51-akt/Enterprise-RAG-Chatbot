@@ -16,6 +16,7 @@ from flask import Flask
 from .core.security import hash_password, validate_password_strength
 from .extensions import db
 from .models import AuditEvent, Conversation, Document, DocStatus, RevokedToken, Role, User, utcnow
+from .services.ingestion.queue import IngestionAlreadyRunning, enqueue_ingestion, run_worker, run_worker_once
 from .services.permissions.policy import seed_roles_and_permissions
 
 
@@ -56,12 +57,29 @@ def register_cli(app: Flask) -> None:
 
     @app.cli.command("reindex-all")
     def reindex_all():
-        """Re-embed every non-deleting document (e.g. after changing EMBEDDING_MODEL: reset the Chroma dir first)."""
-        from .services.ingestion.pipeline import ingest_document
-
+        """Queue every non-deleting document for re-embedding."""
         for doc in Document.query.filter(Document.status != DocStatus.DELETING.value).all():
-            result = ingest_document(doc.id)
-            click.echo(f"{doc.id} {result.status}")
+            try:
+                enqueue_ingestion(doc)
+            except IngestionAlreadyRunning:
+                click.echo(f"{doc.id} is already being processed; skipped.")
+        db.session.commit()
+        click.echo("Re-index jobs queued.")
+
+    @app.cli.command("ingestion-worker")
+    @click.option("--once", "run_once", is_flag=True, help="Process one job, then exit.")
+    @click.option("--poll-interval", type=click.FloatRange(min=0, min_open=True), default=None)
+    def ingestion_worker(run_once: bool, poll_interval: float | None):
+        """Process durable document-ingestion jobs."""
+        interval = poll_interval or app.config["INGESTION_POLL_SECONDS"]
+        if run_once:
+            click.echo("Processed one job." if run_worker_once(app) else "No queued jobs.")
+            return
+        click.echo(f"Ingestion worker polling every {interval:g}s. Press Ctrl+C to stop.")
+        try:
+            run_worker(app, interval)
+        except KeyboardInterrupt:
+            click.echo("Ingestion worker stopped.")
 
     @app.cli.command("seed-demo")
     @click.option("--password", envvar="DEMO_PASSWORD", required=True,
