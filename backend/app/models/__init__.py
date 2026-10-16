@@ -141,25 +141,7 @@ class Document(db.Model):
     role_grants = db.relationship("DocumentRoleGrant", cascade="all, delete-orphan", lazy="selectin")
     user_grants = db.relationship("DocumentUserGrant", cascade="all, delete-orphan", lazy="selectin",
                                   foreign_keys="DocumentUserGrant.document_id")
-    ingestion_job = db.relationship(
-        "IngestionJob", back_populates="document", cascade="all, delete-orphan", uselist=False, lazy="select"
-    )
     passages = db.relationship("ParentPassage", cascade="all, delete-orphan", lazy="select")
-
-
-class IngestionJob(db.Model):
-    __tablename__ = "ingestion_jobs"
-    document_id = db.Column(
-        db.String(36), db.ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
-    )
-    status = db.Column(db.String(16), nullable=False, default="QUEUED", index=True)
-    attempt_count = db.Column(db.Integer, nullable=False, default=0)
-    locked_at = db.Column(db.DateTime(timezone=True), nullable=True)
-    owner_token = db.Column(db.String(36), nullable=True)
-    last_error = db.Column(db.String(500), nullable=True)
-    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
-    document = db.relationship("Document", back_populates="ingestion_job")
 
 
 class ParentPassage(db.Model):

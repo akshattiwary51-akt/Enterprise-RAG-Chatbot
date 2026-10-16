@@ -31,9 +31,12 @@ USERS = {
 
 
 def make_app(tmp_path, **overrides):
+    # Default: throw-away SQLite file per test. Set TEST_DATABASE_URL (e.g. a disposable PostgreSQL database)
+    # to run the identical suite against another engine; the schema is dropped and recreated for every app.
+    pg_url = os.environ.get("TEST_DATABASE_URL")
     cfg = {
         "SECRET_KEY": "s" * 40, "JWT_SECRET_KEY": "j" * 40,
-        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path}/test.db",
+        "SQLALCHEMY_DATABASE_URI": pg_url or f"sqlite:///{tmp_path}/test.db",
         "EMBEDDINGS_PROVIDER": "fake", "LLM_PROVIDER": "fake",
         "UPLOAD_DIR": str(tmp_path / "uploads"), "CHROMA_DIR": str(tmp_path / "chroma"),
         "AUDIT_LOG_FILE": None, "RATELIMIT_ENABLED": False,
@@ -42,6 +45,8 @@ def make_app(tmp_path, **overrides):
     cfg.update(overrides)
     app = create_app(cfg)
     with app.app_context():
+        if pg_url:
+            db.drop_all()
         db.create_all()
         seed_roles_and_permissions()
     return app

@@ -1,34 +1,14 @@
 import io
 import os
-import subprocess
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from app.demo import make_csv, make_docx, make_pdf, make_xlsx
 from app.extensions import db
-from app.models import Document, IngestionJob, ParentPassage, utcnow
-from app.services.ingestion import queue
-from app.services.ingestion.queue import run_worker_once
+from app.models import Document, ParentPassage
 from app.services.retrieval.vectorstore import VectorStoreUnavailable
-from conftest import make_app, upload
-
-
-def assert_windows_private_acl(path: Path) -> None:
-    result = subprocess.run(
-        ["icacls.exe", str(path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    acl = result.stdout.casefold()
-    assert "owner rights:" in acl
-    assert "nt authority\\system:" in acl
-    assert "builtin\\administrators:" in acl
-    assert "authenticated users:" not in acl
-    assert "builtin\\users:" not in acl
-    assert "everyone:" not in acl
+from conftest import upload
 
 
 # ---- supported formats ------------------------------------------------------------------------
@@ -42,7 +22,6 @@ def assert_windows_private_acl(path: Path) -> None:
         ("memo.docx", make_docx([("Heading 1", "Policy"), ("Normal", "Employees must badge in daily."), ("Heading 2", "Remote"), ("Normal", "Remote work needs approval.")])),
         ("report.pdf", make_pdf(["First page about apples.", "Second page about oranges."])),
     ],
-    ids=["notes.txt", "readme.md", "table.csv", "book.xlsx", "memo.docx", "report.pdf"],
 )
 def test_supported_formats_ingest_to_ready(client, auth, filename, data):
     r = upload(client, auth("admin"), filename, data, ["hr"])
@@ -112,30 +91,8 @@ def test_storage_name_is_server_generated_and_private(client, auth, app):
     doc = db.session.get(Document, r["id"])
     assert "Salaries" not in doc.storage_name and doc.storage_name.endswith(".txt")
     path = Path(app.config["UPLOAD_DIR"]) / doc.storage_name
-    assert path.exists()
-    if os.name != "nt":
-        assert (path.stat().st_mode & 0o077) == 0  # owner-only permissions
-    else:
-        assert_windows_private_acl(path)
+    assert path.exists() and (path.stat().st_mode & 0o077) == 0  # owner-only permissions
     assert "storage_name" not in str(r)
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows ACL behavior only")
-def test_existing_upload_files_are_secured_on_startup(tmp_path):
-    upload_dir = tmp_path / "uploads"
-    upload_dir.mkdir()
-    existing_file = upload_dir / "previous-upload.txt"
-    existing_file.write_text("private", encoding="utf-8")
-    subprocess.run(
-        ["icacls.exe", str(existing_file), "/grant", "*S-1-1-0:(M)"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    make_app(tmp_path, UPLOAD_DIR=str(upload_dir))
-
-    assert_windows_private_acl(existing_file)
 
 
 def test_macro_workbook_rejected(client, auth):
@@ -255,126 +212,6 @@ def test_concurrent_claim_is_exclusive(client, auth, app):
     db.session.commit()
     pipeline.ingest_document(doc_id)
     assert db.session.get(Document, doc_id).status == "PROCESSING"  # second worker backed off
-
-
-def test_upload_is_queued_and_worker_completes_it(client, auth, app):
-    app.config["INGESTION_INLINE"] = False
-    response = upload(client, auth("admin"), "queued.txt", b"durable queued document", ["hr"])
-
-    assert response.status_code == 202
-    body = response.get_json()
-    assert body["status"] == "PENDING"
-    job = db.session.get(IngestionJob, body["id"])
-    assert job.status == "QUEUED" and job.attempt_count == 0
-
-    assert run_worker_once(app)
-    db.session.expire_all()
-    doc = db.session.get(Document, body["id"])
-    job = db.session.get(IngestionJob, body["id"])
-    assert doc.status == "READY" and doc.chunk_count > 0
-    assert job.status == "SUCCEEDED" and job.attempt_count == 1
-    assert not run_worker_once(app)
-
-
-def test_reindex_is_queued_and_queued_upload_can_be_deleted(client, auth, app):
-    app.config["INGESTION_INLINE"] = False
-    response = upload(client, auth("admin"), "reindex-queued.txt", b"queue a reindex operation", ["hr"])
-    doc_id = response.get_json()["id"]
-    assert response.status_code == 202
-
-    reindex = client.post(f"/api/documents/{doc_id}/reindex", headers=auth("admin"))
-    assert reindex.status_code == 202
-    assert reindex.get_json()["status"] == "PENDING"
-    assert run_worker_once(app, doc_id)
-    db.session.expire_all()
-    assert db.session.get(Document, doc_id).status == "READY"
-    assert db.session.get(IngestionJob, doc_id).status == "SUCCEEDED"
-
-    pending = upload(client, auth("admin"), "delete-queued.txt", b"delete while still queued", ["hr"])
-    pending_id = pending.get_json()["id"]
-    assert client.delete(f"/api/documents/{pending_id}", headers=auth("admin")).status_code == 200
-    assert db.session.get(Document, pending_id) is None
-    assert db.session.get(IngestionJob, pending_id) is None
-
-
-def test_expired_worker_lease_is_reclaimed(client, auth, app):
-    app.config["INGESTION_INLINE"] = False
-    response = upload(client, auth("admin"), "recover.txt", b"recover a crashed worker", ["hr"])
-    doc_id = response.get_json()["id"]
-    job = db.session.get(IngestionJob, doc_id)
-    job.status = "PROCESSING"
-    job.attempt_count = 1
-    job.locked_at = utcnow() - timedelta(seconds=app.config["INGESTION_LEASE_SECONDS"] + 5)
-    job.owner_token = "abandoned-worker"
-    doc = db.session.get(Document, doc_id)
-    doc.status = "PROCESSING"
-    db.session.commit()
-
-    assert run_worker_once(app)
-    db.session.expire_all()
-    assert db.session.get(Document, doc_id).status == "READY"
-    job = db.session.get(IngestionJob, doc_id)
-    assert job.status == "SUCCEEDED" and job.attempt_count == 2 and job.owner_token is None
-
-
-def test_exhausted_worker_lease_fails_document_and_reindex_resets_job(client, auth, app):
-    app.config.update(INGESTION_INLINE=False, INGESTION_MAX_ATTEMPTS=1)
-    response = upload(client, auth("admin"), "exhausted.txt", b"recover after lease exhaustion", ["hr"])
-    doc_id = response.get_json()["id"]
-    job = db.session.get(IngestionJob, doc_id)
-    job.status = "PROCESSING"
-    job.attempt_count = 1
-    job.locked_at = utcnow() - timedelta(seconds=app.config["INGESTION_LEASE_SECONDS"] + 5)
-    job.owner_token = "abandoned-worker"
-    db.session.get(Document, doc_id).status = "PROCESSING"
-    db.session.commit()
-
-    assert not run_worker_once(app)
-    db.session.expire_all()
-    assert db.session.get(Document, doc_id).status == "FAILED"
-    job = db.session.get(IngestionJob, doc_id)
-    assert job.status == "FAILED" and job.last_error
-
-    response = client.post(f"/api/documents/{doc_id}/reindex", headers=auth("admin"))
-    assert response.status_code == 202 and response.get_json()["status"] == "PENDING"
-    db.session.expire_all()
-    job = db.session.get(IngestionJob, doc_id)
-    assert job.status == "QUEUED" and job.attempt_count == 0 and job.last_error is None
-    assert run_worker_once(app, doc_id)
-    db.session.expire_all()
-    assert db.session.get(Document, doc_id).status == "READY"
-
-
-def test_lease_renewal_racing_expiry_preserves_active_job(client, auth, app, monkeypatch):
-    app.config.update(INGESTION_INLINE=False, INGESTION_MAX_ATTEMPTS=1)
-    response = upload(client, auth("admin"), "renewed-lease.txt", b"renew a lease before expiry", ["hr"])
-    doc_id = response.get_json()["id"]
-    job = db.session.get(IngestionJob, doc_id)
-    job.status = "PROCESSING"
-    job.attempt_count = 1
-    job.locked_at = utcnow() - timedelta(seconds=app.config["INGESTION_LEASE_SECONDS"] + 5)
-    job.owner_token = "worker-renewing-lease"
-    db.session.get(Document, doc_id).status = "PROCESSING"
-    db.session.commit()
-
-    original_stale_clause = queue._stale_clause
-    stale_clause_calls = 0
-
-    def renew_after_expiry_selection(stale_before):
-        nonlocal stale_clause_calls
-        stale_clause_calls += 1
-        if stale_clause_calls == 2:
-            job = db.session.get(IngestionJob, doc_id)
-            job.locked_at = utcnow()
-            db.session.commit()
-        return original_stale_clause(stale_before)
-
-    monkeypatch.setattr(queue, "_stale_clause", renew_after_expiry_selection)
-    assert not run_worker_once(app)
-    db.session.expire_all()
-    job = db.session.get(IngestionJob, doc_id)
-    assert job.status == "PROCESSING" and job.owner_token == "worker-renewing-lease"
-    assert db.session.get(Document, doc_id).status == "PROCESSING"
 
 
 def test_delete_removes_vectors_passages_file_and_row(client, auth, services, app):

@@ -31,7 +31,14 @@ def ready():
     try:
         db.session.execute(text("SELECT 1"))
         checks["database"] = "ok"
+        if db.engine.dialect.name == "postgresql":
+            # A non-UTF8 database (e.g. SQL_ASCII from a C-locale initdb) makes every non-ASCII value
+            # (names, currency symbols, accented document text) fail at write time. Surface it here.
+            encoding = db.session.execute(text("SHOW server_encoding")).scalar()
+            if str(encoding).upper() != "UTF8":
+                checks["database"] = "unsupported_encoding"
     except Exception:
+        db.session.rollback()
         checks["database"] = "unavailable"
     try:
         get_services().vector_store.ping()

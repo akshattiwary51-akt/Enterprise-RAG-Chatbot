@@ -10,7 +10,6 @@ from ..models import Document, DocumentRoleGrant, DocumentUserGrant, DocStatus, 
 from ..schemas import PageSchema, UpdatePermissionsSchema, UploadFormSchema, load_json
 from ..services.audit import service as audit
 from ..services.ingestion import pipeline
-from ..services.ingestion.queue import IngestionAlreadyRunning, enqueue_ingestion, run_worker_once
 from ..services.ingestion.validation import DOWNLOAD_MIME, UploadRejected, validate_upload
 from ..services.permissions import service as perms
 from ..services.rag.service import locator_label
@@ -67,7 +66,7 @@ def upload():
     ---
     tags: [Documents]
     consumes: [multipart/form-data]
-    responses: {202: {description: Stored and queued}, 400: {description: Rejected}, 409: {description: Duplicate}, 413: {description: Too large}}
+    responses: {201: {description: Stored and processed}, 400: {description: Rejected}, 409: {description: Duplicate}, 413: {description: Too large}}
     """
     user = g.current_user
     file = request.files.get("file")
@@ -102,17 +101,13 @@ def upload():
     db.session.add(doc)
     db.session.flush()
     _apply_acl(doc, roles, users, user)
-    enqueue_ingestion(doc)
     db.session.commit()
     audit.record("document.upload", actor=user, target_type="document", target_id=doc.id,
                  details={"type": ftype, "size": len(data), "classification": doc.classification,
                           "roles": [r.name for r in roles]})
 
-    if current_app.config["INGESTION_INLINE"]:
-        run_worker_once(current_app._get_current_object(), doc.id)
-        db.session.refresh(doc)
-        return jsonify(document_dict(doc, include_acl=True)), 201
-    return jsonify(document_dict(doc, include_acl=True)), 202
+    doc = pipeline.ingest_document(doc.id)  # synchronous; see docs/ARCHITECTURE.md for the queue trade-off
+    return jsonify(document_dict(doc, include_acl=True)), 201
 
 
 @bp.get("")
@@ -269,26 +264,17 @@ def update_permissions(document_id: str):
 @bp.post("/<document_id>/reindex")
 @permission_required("documents.manage_permissions")
 def reindex(document_id: str):
-    """Queue a document for re-indexing (idempotent).
+    """Retry/refresh indexing for a document (idempotent).
     ---
     tags: [Documents]
-    responses: {202: {description: Queued}, 404: {description: Not found}, 409: {description: Already processing}}
+    responses: {200: {description: Result status}, 404: {description: Not found}}
     """
-    doc = db.session.get(Document, document_id)
-    if doc is None:
+    if db.session.get(Document, document_id) is None:
         raise not_found("Document not found")
-    try:
-        enqueue_ingestion(doc)
-    except IngestionAlreadyRunning:
-        raise conflict("Document ingestion is already in progress", code="ingestion_in_progress")
-    db.session.commit()
+    doc = pipeline.ingest_document(document_id)
     audit.record("document.reindex", actor=g.current_user, target_type="document", target_id=document_id,
-                 details={"status": "queued"})
-    if current_app.config["INGESTION_INLINE"]:
-        run_worker_once(current_app._get_current_object(), document_id)
-        db.session.refresh(doc)
-        return jsonify(document_dict(doc, include_acl=True))
-    return jsonify(document_dict(doc, include_acl=True)), 202
+                 details={"status": doc.status})
+    return jsonify(document_dict(doc, include_acl=True))
 
 
 @bp.delete("/<document_id>")
@@ -302,10 +288,6 @@ def delete(document_id: str):
     doc = db.session.get(Document, document_id)
     if doc is None:
         raise not_found("Document not found")
-    if doc.status == DocStatus.PROCESSING.value or (
-        doc.ingestion_job is not None and doc.ingestion_job.status == "PROCESSING"
-    ):
-        raise conflict("Document ingestion is in progress", code="ingestion_in_progress")
     try:
         pipeline.delete_document(doc)
     except pipeline.DeletionFailed:

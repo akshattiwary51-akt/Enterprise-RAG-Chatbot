@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export function Spinner({ className = "" }: { className?: string }) {
@@ -91,14 +92,27 @@ export function Badge({ value, label }: { value: string; label?: string }) {
 }
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    // Escape must work wherever focus is, so listen on the document rather than on the (unfocused) overlay.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseRef.current(); };
+    document.addEventListener("keydown", onKey);
+    // Move focus into the dialog and give it back to the opener on close (keyboard / screen-reader users).
+    const opener = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className={`max-h-[90vh] w-full overflow-auto rounded-t-2xl bg-white shadow-xl sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-md"}`}>
         <header className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white px-5 py-3">
           <h2 className="font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="rounded p-1 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+          <button ref={closeRef} onClick={onClose} aria-label="Close" className="rounded p-1 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </header>
         <div className="p-5">{children}</div>
       </div>

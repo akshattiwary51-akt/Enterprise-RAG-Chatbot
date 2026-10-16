@@ -61,15 +61,12 @@ def store_file(data: bytes, file_type: str) -> str:
     return storage_name
 
 
-def _claim_for_processing(document_id: str, recover_processing: bool = False) -> bool:
-    claimable_statuses = [DocStatus.PENDING.value, DocStatus.FAILED.value, DocStatus.READY.value]
-    if recover_processing:
-        claimable_statuses.append(DocStatus.PROCESSING.value)
+def _claim_for_processing(document_id: str) -> bool:
     res = db.session.execute(
         update(Document)
         .where(
             Document.id == document_id,
-            Document.status.in_(claimable_statuses),
+            Document.status.in_([DocStatus.PENDING.value, DocStatus.FAILED.value, DocStatus.READY.value]),
         )
         .values(status=DocStatus.PROCESSING.value, error_message=None)
     )
@@ -105,11 +102,11 @@ def _fail(doc: Document, message: str) -> Document:
     return doc
 
 
-def ingest_document(document_id: str, recover_processing: bool = False) -> Document | None:
+def ingest_document(document_id: str) -> Document:
     """(Re-)index a document. Returns the refreshed Document (READY or FAILED)."""
     cfg = current_app.config
     started = time.perf_counter()
-    if not _claim_for_processing(document_id, recover_processing):
+    if not _claim_for_processing(document_id):
         doc = db.session.get(Document, document_id)
         return doc  # already processing/deleting/missing: do nothing (idempotent)
     doc = db.session.get(Document, document_id)

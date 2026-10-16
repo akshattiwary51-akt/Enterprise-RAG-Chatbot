@@ -10,7 +10,6 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .core.config import build_config, validate_config
 from .core.errors import ApiError, error_response, register_error_handlers
 from .core.security import register_request_hooks
-from .core.storage import secure_upload_directory
 from .extensions import cors, db, jwt, limiter, migrate
 
 
@@ -33,7 +32,6 @@ def create_app(env: str | dict | None = None, config_overrides: dict | None = No
 
     app = Flask(__name__)
     app.config.update(cfg)
-    secure_upload_directory(cfg["UPLOAD_DIR"])
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if cfg["TRUSTED_PROXY_COUNT"] > 0:
         n = cfg["TRUSTED_PROXY_COUNT"]

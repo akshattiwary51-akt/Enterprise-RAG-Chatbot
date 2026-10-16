@@ -1,242 +1,102 @@
-# Enterprise RAG Chatbot
+# Enterprise RAG Chatbot (role-based access)
 
-An enterprise-oriented retrieval-augmented generation (RAG) chatbot for private
-documents. It combines a React frontend with a Flask API, role- and
-user-scoped document permissions, document ingestion, vector retrieval, and
-answer citations.
+Internal chatbot that answers questions from company PDFs, Word, Excel/CSV, text and Markdown files while
+enforcing role-based and per-document access control **in the backend and in the retrieval pipeline**, before any
+text reaches the LLM.
 
-## Features
+- Backend: Python 3.11+, Flask, SQLAlchemy/Alembic, Flask-JWT-Extended, ChromaDB (optional Pinecone), LangChain, OpenAI.
+- Frontend: React + Vite + TypeScript + Tailwind.
+- Docs: [ARCHITECTURE](docs/ARCHITECTURE.md) · [RBAC](docs/RBAC.md) · [API](docs/API.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [SECURITY](SECURITY.md)
 
-- Upload and index PDF, DOCX, XLSX, CSV, Markdown, and text documents.
-- Assign document access by role and, where permitted, by individual user.
-- Retrieve document passages and answer questions with citations.
-- Recheck access to cited documents when displaying chat history; withhold an
-  answer if a cited document is no longer readable.
-- Manage users, roles, and documents through authenticated API endpoints and
-  the web interface.
-- Use Chroma locally or configure Pinecone; use OpenAI models or deterministic
-  fake providers for local development and tests.
-- Record audit events and expose health and readiness endpoints.
+## Quick start (local development, no paid API calls)
 
-## Technology
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-- **Backend:** Python, Flask, Flask-JWT-Extended, SQLAlchemy, Flask-Migrate
-- **Retrieval and ingestion:** LangChain, Chroma, OpenAI embeddings/chat models,
-  document parsers
-- **Frontend:** React, TypeScript, Vite, Tailwind CSS
-- **Local defaults:** SQLite database and Chroma vector store
-
-## Requirements
-
-- Python 3.11 or newer
-- Node.js 20.19+ or 22.12+ and npm
-- Git
-- An OpenAI API key for real model inference. No external AI key is required
-  when using the fake providers for local development.
-
-## Local development
-
-Commands below use PowerShell from the repository root.
-
-### 1. Configure the backend
-
-Create and activate a virtual environment, then install the backend
-dependencies:
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r .\backend\requirements.txt
+cp .env.example .env            # then edit: see "Model configuration" below
+export APP_ENV=development
+export FLASK_APP=wsgi.py
+flask db upgrade                # creates the SQLite dev DB under ../data/
+flask seed-roles
+ADMIN_PASSWORD='choose-a-strong-Passw0rd' flask create-admin --email you@example.com
+flask run --port 5000
 ```
 
-If PowerShell blocks activation, use the virtual environment interpreter
-directly, for example:
+Frontend (second terminal):
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+```bash
+cd frontend
+npm install
+npm run dev                     # http://localhost:5173, proxies /api to http://localhost:5000
 ```
 
-Create the local backend environment file:
+### Model configuration
 
-```powershell
-Copy-Item .\backend\.env.example .\backend\.env
+| Goal | Settings in `backend/.env` |
+|---|---|
+| Real answers | `EMBEDDINGS_PROVIDER=openai`, `LLM_PROVIDER=openai`, `OPENAI_API_KEY=...` |
+| Offline UI/dev only | `EMBEDDINGS_PROVIDER=fake`, `LLM_PROVIDER=fake` (toy models; **never** in production; rejected when `APP_ENV=production`) |
+
+Without a key the app starts, `/api/ready` reports models as not configured, and chat/ingestion return an explicit
+"OPENAI_API_KEY is missing" error. Changing `EMBEDDING_MODEL` after indexing is refused at startup (the index pins
+its embedding model); re-index instead.
+
+### Optional demo data (development only)
+
+```bash
+DEMO_PASSWORD='Demo-Passw0rd-123' flask seed-demo   # 6 synthetic users, 5 synthetic documents
 ```
+Demo users: `admin|hr|finance|eng|junior|employee@demo.local`. All data is invented and contains
+`CANARY-*` strings used to prove nothing leaks across roles. Refuses to run when `APP_ENV=production`.
 
-Set two different, randomly generated secrets in `backend/.env`. Generate each
-with:
+## Docker Compose
 
-```powershell
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+```bash
+cp .env.example .env            # fill in POSTGRES_PASSWORD, SECRET_KEY, JWT_SECRET_KEY, OPENAI_API_KEY
+docker compose up --build       # UI on http://localhost:8080
+docker compose exec backend flask create-admin --email you@example.com   # prompts for the password
 ```
-
-For a no-key local demo, set the following values in `backend/.env`:
-
-```dotenv
-APP_ENV=development
-EMBEDDINGS_PROVIDER=fake
-LLM_PROVIDER=fake
-VECTOR_BACKEND=chroma
-```
-
-For real model inference, use `openai` for both providers and set
-`OPENAI_API_KEY`. Do not commit `backend/.env` or put secrets in source control.
-
-### 2. Install frontend dependencies
-
-```powershell
-Set-Location .\frontend
-npm ci
-Set-Location ..
-```
-
-### 3. Create the database and optional demo data
-
-Run the database migrations from the backend directory:
-
-```powershell
-Set-Location .\backend
-python -m flask --app wsgi db upgrade
-```
-
-To create demo users and index the synthetic documents in `data/sample`, run:
-
-```powershell
-python ..\scripts\seed_demo.py
-```
-
-The script generates random passwords for newly created demo users and prints
-them once. Save them securely. It does not reset passwords for users that
-already exist. The seeded accounts include `admin@demo.local`,
-`hr@demo.local`, `finance@demo.local`, `engineering@demo.local`, and
-`employee@demo.local`.
-
-### 4. Start the application
-
-Run the backend in one terminal, with the virtual environment activated:
-
-```powershell
-Set-Location .\backend
-python -m flask --app wsgi run --host 127.0.0.1 --port 5000
-```
-
-Run the durable ingestion worker in a second terminal:
-
-```powershell
-Set-Location .\backend
-python -m flask --app wsgi ingestion-worker
-```
-
-Run the frontend in a third terminal:
-
-```powershell
-Set-Location .\frontend
-npm run dev -- --host 127.0.0.1
-```
-
-Open <http://127.0.0.1:5173/>. Vite proxies `/api` requests to the backend at
-`http://localhost:5000` by default. Override the proxy target with
-`VITE_API_PROXY` if the backend is running elsewhere.
-
-Uploads are validated and stored by the API, then committed to the database
-queue and returned with `202 Accepted`. The worker claims queued jobs using a
-database lease, indexes the document, and updates its status. The documents
-page refreshes automatically while indexing is pending. If a worker stops
-unexpectedly, another worker can reclaim the job after its lease expires.
-Start at least one worker for queued documents to be indexed. In test
-configuration, ingestion runs inline unless a test explicitly disables it.
-
-The local development server is not intended for production. Fake providers
-are development-only and return deterministic extractive answers, not answers
-generated by a real language model.
-
-## API and operations
-
-- Liveness: <http://127.0.0.1:5000/api/health>
-- Readiness: <http://127.0.0.1:5000/api/ready>
-- Interactive API documentation: <http://127.0.0.1:5000/apidocs/>
-
-Readiness checks the database, vector store, and model configuration. The
-application also provides Flask CLI commands:
-
-```powershell
-python -m flask --app wsgi seed-roles
-python -m flask --app wsgi create-admin --email admin@example.com --name "Admin"
-python -m flask --app wsgi purge-expired
-python -m flask --app wsgi reindex-all
-python -m flask --app wsgi ingestion-worker --once
-```
-
-`reindex-all` queues the documents; run `ingestion-worker` to process them.
-
-`create-admin` prompts for a password unless `ADMIN_PASSWORD` is set in the
-environment. Avoid passing passwords as command-line arguments.
+No default credentials exist; compose refuses to start if a required secret is missing, and there is no public
+sign-up -- accounts are created by an administrator. See [DEPLOYMENT](docs/DEPLOYMENT.md) for production notes.
 
 ## Tests
 
-Run the main backend suite:
-
-```powershell
-Set-Location .\backend
-python -m pytest tests -q -p no:cacheprovider
+```bash
+scripts/run_tests.sh            # main suite + legacy suite (separate pytest processes)
+python backend/eval/run_eval.py # access-control + retrieval evaluation
 ```
+Tests use fake embeddings and a fake chat model (no network, no cost). Details and the latest recorded results:
+[TESTING](docs/TESTING.md).
 
-Run the legacy suite separately. Its `conftest.py` must not be collected in the
-same pytest process as the main suite:
+## API usage
 
-```powershell
-python -m pytest tests\legacy -q -p no:cacheprovider -o addopts=""
+```bash
+TOKEN=$(curl -s localhost:5000/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"hr@demo.local","password":"Demo-Passw0rd-123"}' | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -s localhost:5000/api/chat -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"What is the grievance escalation code?"}'
 ```
+Interactive OpenAPI docs: `http://localhost:5000/apidocs/`. Reference: [API](docs/API.md).
 
-The tests use fake models and local test data; they do not require paid model
-calls or production credentials. GitHub Actions runs both suites independently
-and also type-checks and builds the frontend on pushes and pull requests to
-`main`.
+## Troubleshooting
 
-Check the frontend:
+| Symptom | Likely cause / fix |
+|---|---|
+| Startup error `Invalid configuration: ...` | A required setting is missing/short; the message names the setting, never its value. |
+| 503 `ai_unavailable` on chat | Model key missing or provider down. Nothing was searched or exposed; retry. |
+| Document stuck in `FAILED` | Read `error_message` in Documents; fix cause and use **Reindex** (idempotent). |
+| `EmbeddingConfigMismatch` at startup | `EMBEDDING_MODEL` changed since indexing. Restore it or re-index into a fresh Chroma dir. |
+| Everything answers "couldn't find sufficient information" | The user has no document grants (deny by default), docs are not `READY`, or `SIMILARITY_THRESHOLD` is too high. |
+| 429 on login | Rate limit (`LOGIN_RATE_LIMIT`). |
+| Duplicate upload rejected (409) | Same file already uploaded by you (checksum match). |
 
-```powershell
-Set-Location .\frontend
-npm run typecheck
-npm run build
-```
+## Status: what is and isn't verified
 
-## Configuration and data
-
-See [`backend/.env.example`](backend/.env.example) for the available
-environment variables. Important settings include:
-
-| Setting | Purpose |
-| --- | --- |
-| `DATABASE_URL` | Database connection; defaults to SQLite in development. |
-| `DATA_DIR` | Root for the local database, uploads, Chroma data, and audit log. |
-| `UPLOAD_DIR` | Private source-document storage directory. |
-| `VECTOR_BACKEND` | `chroma` (default) or `pinecone`. |
-| `EMBEDDINGS_PROVIDER` | `openai` (default) or development/test-only `fake`. |
-| `LLM_PROVIDER` | `openai` (default) or development/test-only `fake`. |
-| `OPENAI_API_KEY` | API key required when either model provider is OpenAI. |
-| `CORS_ORIGINS` | Comma-separated frontend origins allowed by the API. |
-| `INGESTION_POLL_SECONDS` | Worker polling interval when no jobs are queued. |
-| `INGESTION_LEASE_SECONDS` | Worker lease duration before a crashed job can be reclaimed. |
-| `INGESTION_MAX_ATTEMPTS` | Maximum worker claims before an expired job is marked failed. |
-
-Generated databases, vector data, uploads, logs, virtual environments, and
-frontend dependencies are local data and are excluded from Git. On Windows,
-startup restricts upload-directory ACLs to the file owner, `SYSTEM`, and local
-administrators; the process account needs permission to configure these ACLs.
-
-## Production notes
-
-Before deployment:
-
-- Use distinct strong `SECRET_KEY` and `JWT_SECRET_KEY` values and keep them in
-  a secret manager or protected environment variables.
-- Configure PostgreSQL, a persistent vector backend, and real model providers.
-- Set an explicit `CORS_ORIGINS` allowlist and configure trusted proxies only
-  for proxies you control.
-- Use a production WSGI server and HTTPS-terminating reverse proxy; do not use
-  Flask's development server.
-- Choose shared rate-limit storage when running multiple backend workers.
-- Back up and protect the database, vector index, audit logs, and uploaded
-  source documents.
-
-The development defaults are not a production deployment configuration.
+Implemented and exercised by automated tests: authentication, token revocation, RBAC, document ACLs, ingestion for all
+formats, permission-filtered retrieval with database revalidation, citation verification, conversation ownership,
+audit logging, metrics. Both backend suites pass on SQLite **and** PostgreSQL 16; the frontend builds and a real-Chromium
+end-to-end script (`scripts/e2e_ui.py`) passes against the live stack. **Not verified:** real OpenAI calls (tests use fake
+models, so retrieval *quality* is unmeasured), the Pinecone adapter, and the Docker image builds. See
+[TESTING](docs/TESTING.md) for exact results and gaps.
